@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import uvicorn
 from core.config import cfg
+from web import app
 
 
 def main():
