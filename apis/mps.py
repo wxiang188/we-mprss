@@ -35,8 +35,12 @@ async def scan_status():
     """检查扫码登录状态"""
     try:
         result = check_login_status()
+        is_logged_in = result.get('is_logged_in', False)
+        # 返回增强后的状态格式 (修复返回格式)
         return success_response({
-            "is_logged_in": result.get('is_logged_in', False),
+            "is_logged_in": is_logged_in,
+            "status": result.get('status', 0),
+            "status_msg": result.get('status_msg', ''),
             "has_token": bool(result.get('token')),
             "token": result.get('token', '')[:20] + '...' if result.get('token') else ''
         })

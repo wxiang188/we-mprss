@@ -76,7 +76,8 @@
 
               <div v-if="qrcode" class="qrcode-display">
                 <img :src="qrcode" alt="登录二维码" />
-                <p class="qrcode-tip">请使用微信扫描二维码登录</p>
+                <p class="qrcode-tip">{{ currentStatusMsg || '请使用微信扫描二维码登录' }}</p>
+                <a-alert v-if="currentStatusMsg" :message="currentStatusMsg" type="info" show-icon style="margin-top: 12px" />
               </div>
             </div>
 
@@ -125,16 +126,16 @@
         <a-tab-pane key="byArticle" tab="通过文章链接获取">
           <a-form layout="vertical">
             <a-form-item label="微信公众号文章链接">
-              <a-input
-                v-model:value="articleUrl"
-                placeholder="请输入微信公众号文章链接，如：https://mp.weixin.qq.com/s/xxx"
-              >
-                <template #append>
-                  <a-button @click="fetchMpByArticle" :loading="fetching">
-                    获取
-                  </a-button>
-                </template>
-              </a-input>
+              <div style="display: flex; gap: 8px">
+                <a-input
+                  v-model:value="articleUrl"
+                  placeholder="请输入微信公众号文章链接，如：https://mp.weixin.qq.com/s/xxx"
+                  @pressEnter="fetchMpByArticle"
+                />
+                <a-button type="primary" @click="fetchMpByArticle" :loading="fetching">
+                  获取
+                </a-button>
+              </div>
             </a-form-item>
 
             <a-divider v-if="mpInfo.mp_name">获取到的公众号信息</a-divider>
@@ -191,6 +192,7 @@ const qrcode = ref('')
 const isLoggedIn = ref(false)
 const wxAccounts = ref([])
 const accountsLoading = ref(false)
+const currentStatusMsg = ref('')
 let scanTimer = null
 
 // 通过文章链接获取
@@ -253,14 +255,17 @@ const checkLoginStatus = async () => {
   try {
     const res = await fetch('/api/wx/mps/scan-status')
     const data = await res.json()
-    if (data.data && data.data.is_logged_in) {
-      isLoggedIn.value = true
-      if (scanTimer) {
-        clearInterval(scanTimer)
-        scanTimer = null
+    if (data.data) {
+      currentStatusMsg.value = data.data.status_msg
+      if (data.data.is_logged_in) {
+        isLoggedIn.value = true
+        if (scanTimer) {
+          clearInterval(scanTimer)
+          scanTimer = null
+        }
+        // 获取公众号列表
+        loadWxAccounts()
       }
-      // 获取公众号列表
-      loadWxAccounts()
     }
   } catch (e) {
     console.error(e)
