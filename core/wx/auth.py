@@ -44,10 +44,9 @@ class WeChatAuth:
 
         self.is_logged_in = False
         self._islogin = False
-
-        # 回调函数
-        self.login_callback = None
-        self.notice_callback = None
+        self.status = 0  # 0: 待扫码, 1: 已扫码, 2: 登录成功, 3: 已过期, 4: 错误
+        self.current_uuid = None
+        self.status_msg = ""
 
         # 线程安全
         self._lock = threading.Lock()
@@ -90,6 +89,11 @@ class WeChatAuth:
             if qr_info:
                 # 生成二维码图片
                 self._generate_qr_image(qr_info['qr_url'])
+
+                # 记录当前有效的 UUID 并更新状态
+                self.current_uuid = qr_info['uuid']
+                self.status = 0
+                self.status_msg = "请使用微信扫描二维码登录"
 
                 # 启动登录状态检查
                 self._start_login_check(qr_info['uuid'])
@@ -312,22 +316,33 @@ class WeChatAuth:
         """启动登录状态检查"""
         def check_login():
             try:
+                # 线程安全检查：如果 UUID 已更新，则停止旧线程
+                if self.current_uuid != uuid:
+                    logger.info(f"UUID {uuid} 已失效或已被替换，停止旧的轮询线程")
+                    return
+
                 status = self._check_login_status(uuid)
                 if status == 'success':
                     self._islogin = True
+                    self.status = 2
+                    self.status_msg = "登录成功"
                     self._handle_login_success()
                 elif status == 'waiting':
                     # 继续等待
                     Timer(2.0, check_login).start()
                 elif status == 'scanned':
                     # 已扫描，等待确认
+                    self.status = 1
+                    self.status_msg = '已扫描，请在手机上确认登录'
                     if self.notice_callback:
-                        self.notice_callback('已扫描，请在手机上确认登录')
+                        self.notice_callback(self.status_msg)
                     Timer(2.0, check_login).start()
                 elif status == 'expired':
                     # 二维码过期
+                    self.status = 3
+                    self.status_msg = '二维码已过期，请重新获取'
                     if self.notice_callback:
-                        self.notice_callback('二维码已过期，请重新获取')
+                        self.notice_callback(self.status_msg)
                     return
                 elif status == 'exists':
                     return
@@ -344,7 +359,7 @@ class WeChatAuth:
         # 启动检查
         Timer(2.0, check_login).start()
 
-    def _check_login_status(self, uuid: str) -> str:
+    def _check_login_status(self, uuid: str = None) -> str:
         """检查登录状态"""
         try:
             check_url = f"{self.base_url}/cgi-bin/scanloginqrcode"
@@ -376,6 +391,8 @@ class WeChatAuth:
 
                 print(f"登录状态检查: {data}")
 
+                if "invalid session" in str(data):
+                    return 'invalid session'
                 if status == 1:
                     self.cookies = requests.utils.dict_from_cookiejar(self.session.cookies) if self.session.cookies else {}
                     return 'success'  # 登录成功
@@ -385,7 +402,7 @@ class WeChatAuth:
                     self.cookies = requests.utils.dict_from_cookiejar(self.session.cookies) if self.session.cookies else {}
                     return 'success'  # 登录成功
                 elif status == 4:
-                    return 'expired'  # 二维码过期
+                    return 'scanned'  # 已扫描，等待确认
                 else:
                     return 'waiting'  # 继续等待
 
@@ -457,6 +474,8 @@ class WeChatAuth:
         """获取会话信息"""
         return {
             "is_logged_in": self.is_logged_in,
+            "status": self.status,
+            "status_msg": self.status_msg,
             "token": self.token,
             "cookies": self.cookies,
             "cookies_str": '; '.join([f"{k}={v}" for k, v in self.cookies.items()])
@@ -488,12 +507,25 @@ def get_wechat_auth() -> WeChatAuth:
 
 def generate_qr_code(callback: Optional[Callable] = None, notice: Optional[Callable] = None) -> Dict[str, Any]:
     """生成二维码"""
-    auth = get_wechat_auth()
-    # 重新初始化
-    auth.__init__()
-    auth.login_callback = callback
-    auth.notice_callback = notice
-    return auth.get_qr_code()
+    global _wechat_auth
+
+    # 如果已登录，直接返回当前状态
+    if _wechat_auth and _wechat_auth.is_logged_in:
+        return {
+            "code": _wechat_auth._get_qr_base64(),
+            "uuid": "",
+            "msg": "已登录"
+        }
+
+    # 如果实例不存在，创建新实例
+    if _wechat_auth is None:
+        _wechat_auth = WeChatAuth()
+
+    # 设置回调
+    _wechat_auth.login_callback = callback
+    _wechat_auth.notice_callback = notice
+
+    return _wechat_auth.get_qr_code()
 
 
 def check_login_status() -> Dict[str, Any]:
