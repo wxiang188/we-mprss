@@ -114,9 +114,24 @@ async def add_mp(request: AddMPRequest):
         if existing:
             return error_response(40001, "公众号已存在")
 
-        # 获取公众号信息
-        wx = WeChatAuth()
-        mp_info = wx.get_mp_info(request.faker_id)
+        # 使用全局授权实例 (修复状态丢失)
+        auth = get_wechat_auth()
+        session_info = auth.get_session_info()
+
+        # 公众号信息 (优先使用请求中的信息)
+        mp_name = request.mp_name
+        mp_cover = request.mp_cover
+        mp_intro = request.mp_intro
+
+        # 如果关键信息缺失且已登录，尝试从账号列表动态匹配 (修复 get_mp_info 缺失问题)
+        if not mp_name and session_info.get('is_logged_in'):
+            from core.wx.mp import get_mp_list
+            mps = get_mp_list()
+            for item in mps:
+                if item.get('user_name') == request.faker_id:
+                    mp_name = item.get('nickname')
+                    mp_cover = item.get('headimgurl')
+                    break
 
         # 生成 ID
         mp_id = f"MP_{request.faker_id[:8]}_{int(time.time())}"
@@ -124,9 +139,9 @@ async def add_mp(request: AddMPRequest):
         # 创建公众号
         mp = Feed(
             id=mp_id,
-            mp_name=request.mp_name or mp_info.get("nickname", ""),
-            mp_cover=request.mp_cover or mp_info.get("head_img", ""),
-            mp_intro=request.mp_intro or mp_info.get("intro", ""),
+            mp_name=mp_name or "未知公众号",
+            mp_cover=mp_cover or "",
+            mp_intro=mp_intro or "",
             faker_id=request.faker_id,
             status=1,
             sync_time=int(time.time())
@@ -165,11 +180,13 @@ async def delete_mp(mp_id: str):
 async def get_mp_by_article(url: str = Query(..., min_length=1)):
     """通过公众号文章链接获取公众号信息"""
     try:
-        # 获取微信配置
-        cookies = cfg.get("wechat.cookies", "")
+        # 获取当前活跃 session 的 cookies (修复 API 调用错误/Cookies 过期)
+        auth = get_wechat_auth()
+        session_info = auth.get_session_info()
+        active_cookies = session_info.get('cookies_str', '') or cfg.get("wechat.cookies", "")
 
         # 解析文章链接
-        mp_info = parse_wechat_article(url, cookies)
+        mp_info = parse_wechat_article(url, active_cookies)
 
         if not mp_info:
             return error_response(40401, "无法解析文章链接，请确保链接正确")
