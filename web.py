@@ -62,7 +62,10 @@ async def shutdown_event():
 
 @app.get("/")
 async def root():
-    """根路径"""
+    """根路径 - 优先返回前端 UI"""
+    index_file = os.path.join(os.path.dirname(__file__), "static", "index.html")
+    if os.path.exists(index_file):
+        return FileResponse(index_file)
     return {
         "name": "WeChat MP RSS API",
         "version": "1.0.0",
@@ -78,8 +81,14 @@ async def health():
 
 # 静态文件服务
 static_dir = os.path.join(os.path.dirname(__file__), "static")
-if os.path.exists(static_dir):
-    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+if not os.path.exists(static_dir):
+    os.makedirs(static_dir)
+
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
+# 同时挂载资产目录（适配 Vite 构建）
+assets_dir = os.path.join(static_dir, "assets")
+if os.path.exists(assets_dir):
+    app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
 
 if __name__ == "__main__":
