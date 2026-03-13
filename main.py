@@ -33,7 +33,8 @@ def main():
 
     # 服务器配置
     host = cfg.get("server.host", "0.0.0.0")
-    port = cfg.get("server.port", 8000)
+    # 优先使用环境变量 PORT (Railway 规范)
+    port = int(os.environ.get("PORT", cfg.get("server.port", 8000)))
     debug = cfg.get("server.debug", False)
 
     print(f"\n启动服务: http://{host}:{port}")
