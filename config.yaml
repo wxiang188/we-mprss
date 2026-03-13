@@ -1,0 +1,68 @@
+# WeChat MP RSS 配置文件
+
+# 服务器配置
+server:
+  host: "0.0.0.0"
+  port: 8000
+  debug: false
+
+# 数据库配置
+database:
+  type: "sqlite"  # sqlite, mysql, postgres
+  path: "./data/db.db"  # SQLite 路径
+  # mysql: "mysql+pymysql://user:password@localhost:3306/dbname"
+  # postgres: "postgresql://user:password@localhost:5432/dbname"
+
+# Redis 配置
+redis:
+  enabled: false
+  url: "redis://localhost:6379/0"
+
+# AI 配置
+ai:
+  provider: "openai"  # openai, anthropic, custom
+  api_key: "${AI_API_KEY}"
+  base_url: ""  # 自定义 API 地址
+  model: "gpt-4o-mini"
+  # Anthropic 配置
+  # provider: "anthropic"
+  # model: "claude-sonnet-4-20250514"
+
+# 微信配置
+wechat:
+  # 微信 Cookie（用于抓取文章，可选）
+  cookies: ""
+  # 扫码登录配置
+  scan_login:
+    enabled: true
+    qrcode_expires: 300  # 二维码有效期（秒）
+    callback_url: ""
+
+# RSS 配置
+rss:
+  enabled: true
+  title: "微信公众号 RSS"
+  description: "微信公众号 RSS 订阅源"
+  author: "WeChat MP RSS"
+  base_url: "http://localhost:8000"
+
+# 任务配置
+jobs:
+  # 文章同步间隔（分钟）
+  sync_interval: 30
+  # AI 处理间隔（分钟）
+  ai_interval: 60
+  # 最大并发数
+  max_workers: 3
+
+# 导出配置
+export:
+  # 默认导出格式
+  default_format: ["pdf", "csv"]
+  # 导出目录
+  path: "./data/exports"
+
+# 日志配置
+logging:
+  level: "INFO"
+  file: "./data/logs/app.log"

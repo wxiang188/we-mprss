@@ -1,0 +1,92 @@
+"""Web 应用入口"""
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+import os
+
+from core.config import cfg
+from core.db import DB
+
+# API 路由
+from apis.mps import router as mps_router
+from apis.articles import router as articles_router
+from apis.ai import router as ai_router
+from apis.export import router as export_router
+
+# 创建 FastAPI 应用
+app = FastAPI(
+    title="WeChat MP RSS API",
+    description="微信公众号 RSS 生成服务 API",
+    version="1.0.0"
+)
+
+# CORS 中间件
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# 注册路由
+app.include_router(mps_router, prefix="/api")
+app.include_router(articles_router, prefix="/api")
+app.include_router(ai_router, prefix="/api")
+app.include_router(export_router, prefix="/api")
+
+
+@app.on_event("startup")
+async def startup_event():
+    """应用启动事件"""
+    print("=" * 50)
+    print("WeChat MP RSS 启动中...")
+    print("=" * 50)
+
+    # 初始化数据库
+    DB.init()
+
+    print("=" * 50)
+    print("服务启动完成！")
+    print("=" * 50)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """应用关闭事件"""
+    DB.close()
+    print("服务已关闭")
+
+
+@app.get("/")
+async def root():
+    """根路径"""
+    return {
+        "name": "WeChat MP RSS API",
+        "version": "1.0.0",
+        "docs": "/docs"
+    }
+
+
+@app.get("/health")
+async def health():
+    """健康检查"""
+    return {"status": "ok"}
+
+
+# 静态文件服务
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.exists(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    host = cfg.get("server.host", "0.0.0.0")
+    port = cfg.get("server.port", 8000)
+    debug = cfg.get("server.debug", False)
+
+    uvicorn.run(app, host=host, port=port)
