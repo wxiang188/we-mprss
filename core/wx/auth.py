@@ -56,19 +56,70 @@ class WeChatAuth:
     def get_qr_code(self) -> Dict[str, Any]:
         """获取登录二维码"""
         try:
-            # 访问登录页面
+            # 访问登录页面获取初始cookies
             response = self.session.get(self.base_url)
             response.raise_for_status()
 
-            # 获取UUID
+            # 首先调用预登录接口获取UUID
             uuid = self._get_uuid()
             if not uuid:
                 uuid = self._generate_uuid()
 
-            # 生成UUID的二维码
+            # 直接从微信API获取二维码图片
+            timestamp = int(time.time() * 1000)
+            qr_url = f"{self.base_url}/cgi-bin/scanloginqrcode?action=getqrcode&uuid={uuid}&random={timestamp}"
+
+            # 设置合适的请求头
+            self.session.headers.update({
+                'Referer': self.base_url,
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            })
+
+            response = self.session.get(qr_url, allow_redirects=False)
+
+            if response.status_code == 200:
+                content_type = response.headers.get('Content-Type', '')
+
+                # 检查是否返回图片
+                if 'image/' in content_type:
+                    # 保存二维码
+                    with open(self.qr_code_path, 'wb') as f:
+                        f.write(response.content)
+
+                    # 生成Base64
+                    qr_base64 = f"data:image/png;base64,{base64.b64encode(response.content).decode()}"
+
+                    print_info("请使用微信扫描二维码登录")
+
+                    # 启动登录状态检查线程
+                    threading.Thread(target=self._check_login, args=(uuid,), daemon=True).start()
+
+                    return {
+                        "code": qr_base64,
+                        "uuid": uuid,
+                        "msg": "请使用微信扫描二维码登录"
+                    }
+
+            # 如果API获取失败，尝试使用备用方法生成二维码
+            return self._generate_qrcode_fallback(uuid)
+
+        except Exception as e:
+            print_warning(f"获取二维码失败: {e}")
+            # 尝试备用方案
+            try:
+                uuid = self._get_uuid() or self._generate_uuid()
+                return self._generate_qrcode_fallback(uuid)
+            except:
+                return {"code": None, "msg": f"获取二维码失败: {str(e)}"}
+
+    def _generate_qrcode_fallback(self, uuid: str) -> Dict[str, Any]:
+        """备用方案：自己生成二维码（编码移动端登录URL）"""
+        try:
             import qrcode
+            # 使用正确的移动端登录URL
+            qr_url = f"https://mp.weixin.qq.com/cgi-bin/scanloginqrcode?action=getqrcode&uuid={uuid}&random={int(time.time() * 1000)}"
             qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=10, border=4)
-            qr.add_data(f"https://mp.weixin.qq.com/cgi-bin/loginqrcode?action=getqrcode&param=2200&uuid={uuid}")
+            qr.add_data(qr_url)
             qr.make(fit=True)
             img = qr.make_image(fill_color="black", back_color="white")
 
@@ -92,39 +143,8 @@ class WeChatAuth:
             }
 
         except Exception as e:
-            print_warning(f"获取二维码失败: {e}")
+            print_warning(f"备用方案获取二维码失败: {e}")
             return {"code": None, "msg": f"获取二维码失败: {str(e)}"}
-
-        # 旧的获取二维码图片方式（可能已失效）
-        try:
-            # 获取二维码图片
-            qr_url = f"{self.base_url}/cgi-bin/scanloginqrcode?action=getqrcode&uuid={uuid}&random={int(time.time() * 1000)}"
-
-            response = self.session.get(qr_url)
-            if response.status_code == 200 and 'image' in response.headers.get('Content-Type', ''):
-                # 保存二维码
-                with open(self.qr_code_path, 'wb') as f:
-                    f.write(response.content)
-
-                # 生成Base64
-                qr_base64 = f"data:image/png;base64,{base64.b64encode(response.content).decode()}"
-
-                print_info("请使用微信扫描二维码登录")
-
-                # 启动登录状态检查
-                threading.Thread(target=self._check_login, args=(uuid,)).start()
-
-                return {
-                    "code": qr_base64,
-                    "uuid": uuid,
-                    "msg": "请使用微信扫描二维码登录"
-                }
-
-            return {"code": None, "msg": "获取二维码失败"}
-
-        except Exception as e:
-            print_warning(f"获取二维码失败: {e}")
-            return {"code": None, "msg": str(e)}
 
     def _get_uuid(self) -> str:
         """获取登录UUID"""
@@ -157,6 +177,7 @@ class WeChatAuth:
             try:
                 params = {
                     "action": "ask",
+                    "uuid": uuid,
                     "fingerprint": self._generate_uuid(),
                     "lang": "zh_CN",
                     "f": "json",
