@@ -65,42 +65,9 @@ class WeChatAuth:
             if not uuid:
                 uuid = self._generate_uuid()
 
-            # 直接从微信API获取二维码图片
-            timestamp = int(time.time() * 1000)
-            qr_url = f"{self.base_url}/cgi-bin/scanloginqrcode?action=getqrcode&uuid={uuid}&random={timestamp}"
-
-            # 设置合适的请求头
-            self.session.headers.update({
-                'Referer': self.base_url,
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            })
-
-            response = self.session.get(qr_url, allow_redirects=False)
-
-            if response.status_code == 200:
-                content_type = response.headers.get('Content-Type', '')
-
-                # 检查是否返回图片
-                if 'image/' in content_type:
-                    # 保存二维码
-                    with open(self.qr_code_path, 'wb') as f:
-                        f.write(response.content)
-
-                    # 生成Base64
-                    qr_base64 = f"data:image/png;base64,{base64.b64encode(response.content).decode()}"
-
-                    print_info("请使用微信扫描二维码登录")
-
-                    # 启动登录状态检查线程
-                    threading.Thread(target=self._check_login, args=(uuid,), daemon=True).start()
-
-                    return {
-                        "code": qr_base64,
-                        "uuid": uuid,
-                        "msg": "请使用微信扫描二维码登录"
-                    }
-
-            # 如果API获取失败，尝试使用备用方法生成二维码
+            # 始终使用备用方案生成二维码，这样可以确保：
+            # 1. 二维码包含正确的移动端登录URL (action=qrcode)
+            # 2. 手机扫描后能打开登录页面，而不是显示空白
             return self._generate_qrcode_fallback(uuid)
 
         except Exception as e:
@@ -113,11 +80,12 @@ class WeChatAuth:
                 return {"code": None, "msg": f"获取二维码失败: {str(e)}"}
 
     def _generate_qrcode_fallback(self, uuid: str) -> Dict[str, Any]:
-        """备用方案：自己生成二维码（编码移动端登录URL）"""
+        """备用方案：自己生成二维码（使用移动端登录页面URL）"""
         try:
             import qrcode
-            # 使用正确的移动端登录URL
-            qr_url = f"https://mp.weixin.qq.com/cgi-bin/scanloginqrcode?action=getqrcode&uuid={uuid}&random={int(time.time() * 1000)}"
+            # 使用移动端登录页面URL - 微信扫描后会打开这个页面
+            # action=qrcode 会返回HTML登录页面，而不是图片
+            qr_url = f"https://mp.weixin.qq.com/cgi-bin/scanloginqrcode?action=qrcode&uuid={uuid}"
             qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=10, border=4)
             qr.add_data(qr_url)
             qr.make(fit=True)
