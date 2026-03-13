@@ -2,7 +2,7 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 import os
 
 from core.config import cfg
@@ -58,6 +58,33 @@ async def shutdown_event():
     """应用关闭事件"""
     DB.close()
     print("服务已关闭")
+
+
+@app.exception_handler(404)
+async def not_found_exception_handler(request: Request, exc):
+    """处理 404 错误，支持 SPA 路由和根目录静态文件"""
+    path = request.url.path
+
+    # 1. API 或文档请求直接返回 404
+    if path.startswith("/api") or path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/openapi.json"):
+        return JSONResponse(status_code=404, content={"message": "Not Found", "path": path})
+
+    # 2. 尝试匹配 static 目录下的物理文件 (例如 /favicon.svg)
+    # 去除开头的斜杠
+    file_path = path.lstrip("/")
+    if not file_path:
+        file_path = "index.html"
+
+    static_file = os.path.join(os.path.dirname(__file__), "static", file_path)
+    if os.path.isfile(static_file):
+        return FileResponse(static_file)
+
+    # 3. 否则返回 index.html (支持前端 SPA 路由，如 /mps, /articles)
+    index_file = os.path.join(os.path.dirname(__file__), "static", "index.html")
+    if os.path.exists(index_file):
+        return FileResponse(index_file)
+
+    return JSONResponse(status_code=404, content={"message": "Not Found", "path": path})
 
 
 @app.get("/")
