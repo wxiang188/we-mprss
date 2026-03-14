@@ -9,8 +9,8 @@ from pydantic import BaseModel
 from core.db import DB
 from core.models import Feed
 from core.wx.auth import generate_qr_code, check_login_status, get_wechat_auth
-from core.wx.article import parse_wechat_article
-from core.wx.mp import get_mp_list, get_mp_articles, search_biz, get_mp_info_by_article
+from core.wx.article import parse_wechat_article, get_mp_info_by_article
+from core.wx.mp import get_mp_list, get_mp_articles, search_biz
 from core.config import cfg
 from apis.base import success_response, error_response
 
