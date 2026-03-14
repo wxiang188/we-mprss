@@ -29,5 +29,5 @@ export const checkScanStatus = (ticket) => {
 }
 
 export const getMpByArticle = (url) => {
-  return http.get('/wx/mps/by-article', { params: { url } })
+  return http.post('/wx/mps/by-article', null, { params: { url } })
 }

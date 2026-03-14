@@ -10,7 +10,7 @@ from core.db import DB
 from core.models import Feed
 from core.wx.auth import generate_qr_code, check_login_status, get_wechat_auth
 from core.wx.article import parse_wechat_article
-from core.wx.mp import get_mp_list, get_mp_articles
+from core.wx.mp import get_mp_list, get_mp_articles, search_biz, get_mp_info_by_article
 from core.config import cfg
 from apis.base import success_response, error_response
 
@@ -154,7 +154,56 @@ async def add_mp(request: AddMPRequest):
         session.add(mp)
         session.commit()
 
-        return success_response(mp.to_dict(), "添加公众号成功")
+        # 添加成功后尝试同步文章
+        sync_result = None
+        if session_info.get('is_logged_in') and request.faker_id:
+            try:
+                from core.wx.mp import get_mp_articles as fetch_mp_articles
+                from core.models import Article
+
+                articles = fetch_mp_articles(request.faker_id, max_count=5)
+                saved_count = 0
+
+                for art in articles:
+                    # 检查文章是否已存在
+                    existing_art = session.query(Article).filter(
+                        Article.mp_id == mp_id,
+                        Article.title == art.get('title', '')
+                    ).first()
+
+                    if not existing_art:
+                        publish_time = art.get('update_time', 0)
+                        if isinstance(publish_time, str):
+                            try:
+                                publish_time = int(publish_time)
+                            except:
+                                publish_time = 0
+
+                        new_article = Article(
+                            id=art.get('id', f"art_{int(time.time())}_{saved_count}"),
+                            mp_id=mp_id,
+                            title=art.get('title', '无标题'),
+                            author=art.get('author', ''),
+                            content=art.get('content', ''),
+                            digest=art.get('digest', ''),
+                            publish_time=publish_time,
+                            pic_url=art.get('cover', ''),
+                            url=art.get('link', ''),
+                            is_export=0
+                        )
+                        session.add(new_article)
+                        saved_count += 1
+
+                session.commit()
+                sync_result = {"saved_count": saved_count, "total": len(articles)}
+            except Exception as sync_e:
+                print(f"首次同步文章失败: {sync_e}")
+
+        result = mp.to_dict()
+        if sync_result:
+            result['sync_result'] = sync_result
+
+        return success_response(result, "添加公众号成功")
     except Exception as e:
         session.rollback()
         return error_response(50003, f"添加公众号失败: {str(e)}")
@@ -184,13 +233,17 @@ async def delete_mp(mp_id: str):
 async def get_mp_by_article(url: str = Query(..., min_length=1)):
     """通过公众号文章链接获取公众号信息"""
     try:
-        # 获取当前活跃 session 的 cookies (修复 API 调用错误/Cookies 过期)
+        # 获取当前活跃 session 的 cookies
         auth = get_wechat_auth()
         session_info = auth.get_session_info()
         active_cookies = session_info.get('cookies_str', '') or cfg.get("wechat.cookies", "")
 
-        # 解析文章链接
-        mp_info = parse_wechat_article(url, active_cookies)
+        # 使用新增强的 get_mp_info_by_article 函数
+        mp_info = get_mp_info_by_article(url, active_cookies)
+
+        if not mp_info or not mp_info.get("mp_name"):
+            # 如果失败，尝试使用旧的解析器
+            mp_info = parse_wechat_article(url, active_cookies)
 
         if not mp_info:
             return error_response(40401, "无法解析文章链接，请确保链接正确")
@@ -201,11 +254,39 @@ async def get_mp_by_article(url: str = Query(..., min_length=1)):
             "mp_cover": mp_info.get("mp_cover", ""),
             "mp_intro": mp_info.get("mp_intro", ""),
             "mp_id": mp_info.get("mp_id", ""),
-            "article_url": mp_info.get("article_url", "")
+            "biz": mp_info.get("biz", ""),
+            "article_url": mp_info.get("article_url", ""),
+            "article_id": mp_info.get("article_id", "")
         })
 
     except Exception as e:
         return error_response(50006, f"获取公众号信息失败: {str(e)}")
+
+
+@router.get("/search/{kw}", summary="搜索公众号")
+async def search_mp(
+    kw: str,
+    limit: int = Query(5, ge=1, le=20),
+    offset: int = Query(0, ge=0)
+):
+    """搜索公众号 - 复刻原项目 search_Biz 功能"""
+    try:
+        result = search_biz(kw, limit, offset)
+
+        if result.get("error"):
+            return error_response(50007, result.get("error"))
+
+        return success_response({
+            "list": result.get("list", []),
+            "total": result.get("total", 0),
+            "page": {
+                "limit": limit,
+                "offset": offset
+            }
+        })
+
+    except Exception as e:
+        return error_response(50007, f"搜索公众号失败: {str(e)}")
 
 
 @router.post("/scan-qrcode", summary="生成扫码二维码")
@@ -243,13 +324,72 @@ async def sync_articles(mp_id: str):
         if not mp:
             raise HTTPException(status_code=404, detail="公众号不存在")
 
-        # TODO: 调用文章抓取逻辑
+        # 检查授权状态
+        auth = get_wechat_auth()
+        session_info = auth.get_session_info()
+
+        if not session_info.get('is_logged_in'):
+            return error_response(50008, "请先扫码授权登录")
+
+        # 获取 faker_id 用于调用微信 API
+        faker_id = mp.faker_id
+        if not faker_id:
+            # 尝试从 mp_id 中提取
+            if mp_id.startswith("MP_WXS_"):
+                faker_id = mp_id.replace("MP_WXS_", "")
+
+        if not faker_id:
+            return error_response(50009, "无法获取公众号ID")
+
+        # 调用获取文章列表
+        from core.wx.mp import get_mp_articles as fetch_mp_articles
+        articles = fetch_mp_articles(faker_id, max_count=10)
+
+        # 保存文章到数据库
+        from core.models import Article
+        saved_count = 0
+        for art in articles:
+            # 检查文章是否已存在
+            existing = session.query(Article).filter(
+                Article.mp_id == mp_id,
+                Article.title == art.get('title', '')
+            ).first()
+
+            if not existing:
+                # 解析文章发布时间
+                publish_time = art.get('update_time', 0)
+                if isinstance(publish_time, str):
+                    try:
+                        publish_time = int(publish_time)
+                    except:
+                        publish_time = 0
+
+                new_article = Article(
+                    id=art.get('id', f"art_{int(time.time())}_{saved_count}"),
+                    mp_id=mp_id,
+                    title=art.get('title', '无标题'),
+                    author=art.get('author', ''),
+                    content=art.get('content', ''),
+                    digest=art.get('digest', ''),
+                    publish_time=publish_time,
+                    pic_url=art.get('cover', ''),
+                    url=art.get('link', ''),
+                    is_export=0
+                )
+                session.add(new_article)
+                saved_count += 1
+
+        session.commit()
 
         # 更新同步时间
         mp.sync_time = int(time.time())
         session.commit()
 
-        return success_response(message="同步成功")
+        return success_response({
+            "message": "同步成功",
+            "saved_count": saved_count,
+            "total_articles": len(articles)
+        })
     except HTTPException:
         raise
     except Exception as e:
