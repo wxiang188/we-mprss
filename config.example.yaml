@@ -55,6 +55,33 @@ jobs:
   # 最大并发数
   max_workers: 3
 
+# 采集配置
+gather:
+  # 采集模式: web, app, api
+  model: "web"
+  # 是否采集文章正文内容
+  content: false
+  # 请求间隔（秒），避免频率控制
+  interval: 10
+  # 每页文章数量
+  page_size: 5
+  # 最大爬取页数
+  max_pages: 1
+  # 代理配置
+  proxy:
+    enabled: false
+    deno_url: ""  # Deno Deploy 代理地址
+    http_url: ""  # HTTP 代理地址
+
+# 定时任务配置
+# Cron 表达式示例:
+# - "0 * * * *" 每小时执行
+# - "0 */6 * * *" 每6小时执行
+# - "0 0,12 * * *" 每天0点和12点执行
+cron:
+  sync: "0 */6 * *"  # 每6小时同步一次
+  ai: "0 2 * * *"   # 每天凌晨2点处理AI
+
 # 导出配置
 export:
   # 默认导出格式

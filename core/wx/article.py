@@ -337,3 +337,73 @@ def parse_wechat_article(url: str, cookies: str = "") -> Optional[Dict[str, Any]
     except Exception as e:
         print(f"解析文章失败: {e}")
         return None
+
+
+def get_article_content(url: str) -> str:
+    """获取文章正文内容 - 复刻原项目 driver/wxarticle.py 的逻辑
+
+    Args:
+        url: 文章链接
+
+    Returns:
+        文章HTML内容
+    """
+    import requests
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Referer": "https://mp.weixin.qq.com/"
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=15)
+        response.encoding = 'utf-8'
+        html = response.text
+
+        # 检查是否需要验证
+        if "当前环境异常" in html or "完成验证后即可继续访问" in html:
+            print("需要微信环境验证")
+            return ""
+
+        # 提取文章内容 - id="js_content"
+        match = re.search(r'<div[^>]*id="js_content"[^>]*>(.*?)</div>', html, re.DOTALL)
+        if match:
+            content = match.group(1)
+            # 清理内容
+            content = clean_article_content(content)
+            return content
+
+        return ""
+
+    except Exception as e:
+        print(f"获取文章内容失败: {e}")
+        return ""
+
+
+def clean_article_content(html_content: str) -> str:
+    """清理文章内容，去除无关元素
+
+    Args:
+        html_content: 原始HTML内容
+
+    Returns:
+        清理后的HTML内容
+    """
+    if not html_content:
+        return ""
+
+    # 移除脚本标签
+    html_content = re.sub(r'<script[^>]*>.*?</script>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+
+    # 移除样式标签
+    html_content = re.sub(r'<style[^>]*>.*?</style>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+
+    # 移除注释
+    html_content = re.sub(r'<!--.*?-->', '', html_content, flags=re.DOTALL)
+
+    # 移除空白字符
+    html_content = re.sub(r'\s+', ' ', html_content)
+
+    return html_content

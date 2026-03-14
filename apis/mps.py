@@ -424,3 +424,93 @@ async def sync_articles(mp_id: str):
     except Exception as e:
         session.rollback()
         return error_response(50007, f"同步失败: {str(e)}")
+
+
+# ========== 定时任务管理 API ==========
+
+from pydantic import BaseModel
+
+
+class CronJobRequest(BaseModel):
+    """定时任务请求"""
+    cron_expr: str  # Cron 表达式
+    mp_ids: list = None  # 公众号ID列表，为空则同步所有
+
+
+@router.post("/cron/start", summary="启动定时同步任务")
+async def start_cron_job(request: CronJobRequest):
+    """启动定时同步任务"""
+    try:
+        from jobs.mps import start_cron_job
+        from core.models import Feed
+
+        # 获取要同步的公众号
+        session = DB.get_session()
+        try:
+            if request.mp_ids:
+                feeds = session.query(Feed).filter(
+                    Feed.id.in_(request.mp_ids),
+                    Feed.status == 1
+                ).all()
+            else:
+                feeds = session.query(Feed).filter(Feed.status == 1).all()
+
+            if not feeds:
+                return error_response(50010, "没有可同步的公众号")
+
+            # 启动定时任务
+            start_cron_job(request.cron_expr, feeds)
+
+            return success_response({
+                "message": "定时任务已启动",
+                "cron_expr": request.cron_expr,
+                "feed_count": len(feeds)
+            })
+        finally:
+            session.close()
+
+    except Exception as e:
+        return error_response(50010, f"启动定时任务失败: {str(e)}")
+
+
+@router.get("/cron/stop", summary="停止定时同步任务")
+async def stop_cron_job():
+    """停止所有定时同步任务"""
+    try:
+        from jobs import scheduler
+
+        scheduler.stop()
+
+        return success_response({"message": "定时任务已停止"})
+    except Exception as e:
+        return error_response(50011, f"停止定时任务失败: {str(e)}")
+
+
+@router.get("/cron/status", summary="获取定时任务状态")
+async def get_cron_status():
+    """获取定时任务状态"""
+    try:
+        from jobs import scheduler
+
+        return success_response({
+            "running": scheduler.running,
+            "jobs": scheduler.get_jobs()
+        })
+    except Exception as e:
+        return error_response(50012, f"获取任务状态失败: {str(e)}")
+
+
+@router.post("/cron/run-all", summary="立即同步所有公众号")
+async def run_all_now():
+    """立即同步所有公众号"""
+    try:
+        from jobs.mps import fetch_all_articles
+        import threading
+
+        # 在后台线程中执行
+        thread = threading.Thread(target=fetch_all_articles, daemon=True)
+        thread.start()
+
+        return success_response({"message": "同步任务已启动"})
+    except Exception as e:
+        return error_response(50013, f"启动同步失败: {str(e)}")
