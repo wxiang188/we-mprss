@@ -63,9 +63,11 @@ async def get_mps(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     kw: str = Query(""),
-    status: Optional[int] = None
+    status: Optional[int] = None,
+    sort: str = Query("created_desc", description="排序: created_desc, created_asc, articles_desc, articles_asc, name_asc, name_desc")
 ):
     """获取公众号列表"""
+    from core.models import Article
     session = DB.get_session()
     try:
         query = session.query(Feed)
@@ -81,12 +83,39 @@ async def get_mps(
         # 总数
         total = query.count()
 
+        # 排序处理
+        if sort == "created_asc":
+            query = query.order_by(Feed.created_at.asc())
+        elif sort == "name_asc":
+            query = query.order_by(Feed.mp_name.asc())
+        elif sort == "name_desc":
+            query = query.order_by(Feed.mp_name.desc())
+        # created_desc 是默认的
+
         # 分页
-        mps = query.order_by(Feed.created_at.desc()).offset(offset).limit(limit).all()
+        mps = query.offset(offset).limit(limit).all()
+
+        # 获取每个公众号的文章数量
+        mp_list = []
+        for mp in mps:
+            mp_dict = mp.to_dict()
+            # 统计文章数量
+            article_count = session.query(Article).filter(
+                Article.mp_id == mp.id,
+                Article.status == 1
+            ).count()
+            mp_dict['article_count'] = article_count
+            mp_list.append(mp_dict)
+
+        # 如果需要按文章数量排序（在内存中排序）
+        if sort == "articles_desc":
+            mp_list.sort(key=lambda x: x.get('article_count', 0), reverse=True)
+        elif sort == "articles_asc":
+            mp_list.sort(key=lambda x: x.get('article_count', 0))
 
         return success_response({
             "total": total,
-            "list": [mp.to_dict() for mp in mps]
+            "list": mp_list
         })
     except Exception as e:
         return error_response(50001, f"获取公众号列表失败: {str(e)}")

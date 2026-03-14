@@ -14,7 +14,7 @@
       </a-space>
     </div>
 
-    <!-- 搜索栏 -->
+    <!-- 搜索和排序栏 -->
     <div class="table-operations">
       <a-input-search
         v-model:value="searchKw"
@@ -22,32 +22,64 @@
         style="width: 300px"
         @search="loadMps"
       />
+      <a-select v-model:value="sortBy" style="width: 160px; margin-left: 12px" @change="loadMps">
+        <a-select-option value="created_desc">最近添加</a-select-option>
+        <a-select-option value="created_asc">最早添加</a-select-option>
+        <a-select-option value="articles_desc">文章最多</a-select-option>
+        <a-select-option value="articles_asc">文章最少</a-select-option>
+        <a-select-option value="name_asc">名称 A-Z</a-select-option>
+        <a-select-option value="name_desc">名称 Z-A</a-select-option>
+      </a-select>
     </div>
 
+    <!-- 统计信息 -->
+    <a-row :gutter="16" style="margin-bottom: 16px">
+      <a-col :span="6">
+        <a-statistic title="公众号总数" :value="total" />
+      </a-col>
+      <a-col :span="6">
+        <a-statistic title="文章总数" :value="totalArticles" />
+      </a-col>
+      <a-col :span="6">
+        <a-statistic title="今日同步" :value="todaySync" />
+      </a-col>
+    </a-row>
+
     <!-- 公众号列表 -->
-    <a-row :gutter="16">
-      <a-col :span="8" v-for="mp in mps" :key="mp.id">
+    <a-row :gutter="[16, 16]">
+      <a-col :xs="24" :sm="12" :md="8" :lg="6" v-for="mp in mps" :key="mp.id">
         <a-card class="mp-card" :bordered="false" hoverable>
           <template #cover>
-            <img :src="mp.mp_cover || defaultCover" style="height: 120px; object-fit: cover" />
+            <div class="mp-cover-container">
+              <img :src="mp.mp_cover || defaultCover" style="height: 100px; width: 100%; object-fit: cover" />
+              <div class="mp-badge" v-if="mp.article_count > 0">
+                <BookOutlined /> {{ mp.article_count }} 篇
+              </div>
+            </div>
           </template>
           <a-card-meta :title="mp.mp_name">
             <template #description>
-              <p>{{ mp.mp_intro || '暂无简介' }}</p>
-              <p style="color: #999; font-size: 12px">
-                创建时间: {{ formatDate(mp.created_at) }}
-              </p>
+              <p class="mp-intro">{{ mp.mp_intro || '暂无简介' }}</p>
+              <div class="mp-meta">
+                <p><CalendarOutlined /> 创建: {{ formatDate(mp.created_at) }}</p>
+                <p v-if="mp.sync_time"><SyncOutlined /> 同步: {{ formatDateTime(mp.sync_time) }}</p>
+                <p v-else><ExclamationCircleOutlined /> 未同步</p>
+                <p class="mp-faker-id"><TagOutlined /> ID: {{ mp.faker_id || '-' }}</p>
+              </div>
             </template>
           </a-card-meta>
           <template #actions>
             <a-tooltip title="同步文章">
-              <SyncOutlined @click.stop="syncMp(mp.id)" />
+              <SyncOutlined @click.stop="syncMpHandler(mp.id)" :spin="syncingId === mp.id" />
             </a-tooltip>
             <a-tooltip title="查看文章">
               <EyeOutlined @click.stop="viewArticles(mp.id)" />
             </a-tooltip>
+            <a-tooltip title="编辑">
+              <EditOutlined @click.stop="editMp(mp)" />
+            </a-tooltip>
             <a-tooltip title="删除">
-              <DeleteOutlined @click.stop="deleteMp(mp.id)" />
+              <DeleteOutlined @click.stop="deleteMpHandler(mp.id)" />
             </a-tooltip>
           </template>
         </a-card>
@@ -56,6 +88,20 @@
 
     <!-- 空状态 -->
     <a-empty v-if="mps.length === 0" description="暂无公众号，请添加" />
+
+    <!-- 分页 -->
+    <div class="pagination-container" v-if="total > pageSize">
+      <a-pagination
+        v-model:current="currentPage"
+        :total="total"
+        :pageSize="pageSize"
+        @change="loadMps"
+        show-quick-jumper
+        show-size-changer
+        :pageSizeOptions="['12', '24', '48']"
+        @showSizeChange="handlePageSizeChange"
+      />
+    </div>
 
     <!-- 添加公众号弹窗 -->
     <a-modal
@@ -167,16 +213,40 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { message, Modal } from 'ant-design-vue'
-import { PlusOutlined, ReloadOutlined, SyncOutlined, EyeOutlined, DeleteOutlined, QrcodeOutlined } from '@ant-design/icons-vue'
+import {
+  PlusOutlined, ReloadOutlined, SyncOutlined, EyeOutlined,
+  DeleteOutlined, QrcodeOutlined, BookOutlined, CalendarOutlined,
+  TagOutlined, EditOutlined, ExclamationCircleOutlined
+} from '@ant-design/icons-vue'
 import { getMps, addMp, deleteMp, syncMp, getMpByArticle } from '@/api/mps'
 
 const router = useRouter()
 
+// 数据和搜索
 const mps = ref([])
 const searchKw = ref('')
+const sortBy = ref('created_desc')
+const currentPage = ref(1)
+const pageSize = ref(12)
+const total = ref(0)
+const syncingId = ref(null)
+
+// 统计信息
+const totalArticles = computed(() => {
+  return mps.value.reduce((sum, mp) => sum + (mp.article_count || 0), 0)
+})
+const todaySync = computed(() => {
+  const today = new Date().toDateString()
+  return mps.value.filter(mp => {
+    if (!mp.sync_time) return false
+    return new Date(mp.sync_time).toDateString() === today
+  }).length
+})
+
+// 添加弹窗
 const addModalVisible = ref(false)
 const addLoading = ref(false)
 const addTab = ref('byQrcode')
@@ -207,13 +277,28 @@ const mpInfo = ref({
 
 const defaultCover = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMjAiIGhlaWdodD0iMTIwIj48cmVjdCB3aWR0aD0iMTIwIiBoZWlnaHQ9IjEyMCIgZmlsbD0iI2YzZjRmNiIvPjx0ZXh0IHg9IjUwIiB5PSI1MCIgZm9udC1zaXplPSIyNCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0iI2MzYzJhZiI+5raI5oGvPC90ZXh0Pjwvc3ZnPg=='
 
+// 获取公众号列表
 const loadMps = async () => {
   try {
-    const res = await getMps({ limit: 100, kw: searchKw.value })
+    const offset = (currentPage.value - 1) * pageSize.value
+    const res = await getMps({
+      limit: pageSize.value,
+      offset: offset,
+      kw: searchKw.value,
+      sort: sortBy.value
+    })
     mps.value = res.data?.list || []
+    total.value = res.data?.total || 0
   } catch (e) {
     console.error(e)
   }
+}
+
+// 处理每页显示数量变化
+const handlePageSizeChange = (current, size) => {
+  pageSize.value = size
+  currentPage.value = 1
+  loadMps()
 }
 
 const showAddModal = () => {
@@ -398,6 +483,35 @@ const formatDate = (date) => {
   return new Date(date).toLocaleDateString('zh-CN')
 }
 
+const formatDateTime = (timestamp) => {
+  if (!timestamp) return '-'
+  const date = new Date(timestamp)
+  const now = new Date()
+  const diff = now - date
+
+  // 小于1小时显示"X分钟前"
+  if (diff < 3600000) {
+    const mins = Math.floor(diff / 60000)
+    return mins <= 1 ? '刚刚' : `${mins}分钟前`
+  }
+  // 小于24小时显示"X小时前"
+  if (diff < 86400000) {
+    const hours = Math.floor(diff / 3600000)
+    return `${hours}小时前`
+  }
+  // 小于7天显示"X天前"
+  if (diff < 604800000) {
+    const days = Math.floor(diff / 86400000)
+    return `${days}天前`
+  }
+  // 超过7天显示日期
+  return date.toLocaleDateString('zh-CN')
+}
+
+const editMp = (mp) => {
+  message.info('编辑功能开发中')
+}
+
 onMounted(() => {
   loadMps()
 })
@@ -412,6 +526,67 @@ onUnmounted(() => {
 <style scoped>
 .mp-card {
   margin-bottom: 16px;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.mp-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.mp-cover-container {
+  position: relative;
+}
+
+.mp-badge {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.mp-intro {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  color: #666;
+  min-height: 40px;
+}
+
+.mp-meta {
+  font-size: 12px;
+  color: #999;
+}
+
+.mp-meta p {
+  margin: 4px 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mp-faker-id {
+  font-family: monospace;
+  font-size: 11px;
+  color: #888;
+}
+
+.table-operations {
+  display: flex;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.pagination-container {
+  margin-top: 24px;
+  text-align: center;
 }
 
 .mp-preview {
