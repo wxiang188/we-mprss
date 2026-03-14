@@ -1,17 +1,23 @@
 """
 微信公众号文章解析模块 - 使用 Playwright 浏览器获取
 复刻原项目 driver/wxarticle.py 的逻辑
+
+支持同步和异步两种模式：
+- 同步模式：使用 PlaywrightController
+- 异步模式：使用 PlaywrightAsyncController（用于 FastAPI 等 asyncio 环境）
 """
 import re
 import base64
 import time
+import asyncio
+import threading
 from typing import Optional, Dict, Any
 
-from driver.playwright_driver import PlaywrightController
+from driver.playwright_driver import PlaywrightController, get_playwright_async
 
 
 class WeChatArticleFetcher:
-    """微信公众号文章获取器 - 使用 Playwright 浏览器"""
+    """微信公众号文章获取器 - 使用 Playwright 浏览器（同步版本）"""
 
     def __init__(self):
         self.controller = None
@@ -37,7 +43,7 @@ class WeChatArticleFetcher:
             self.page = None
 
     def get_mp_info(self, url: str) -> Dict[str, Any]:
-        """获取公众号信息 - 复刻原项目逻辑
+        """获取公众号信息 - 复刻原项目逻辑（同步版本）
 
         Args:
             url: 微信文章链接
@@ -229,6 +235,175 @@ class WeChatArticleFetcher:
             self.close()
 
         return info
+
+
+class WeChatArticleFetcherAsync:
+    """微信公众号文章获取器 - 使用 Playwright 浏览器（异步版本，用于 FastAPI）"""
+
+    def __init__(self):
+        self.controller = None
+        self.page = None
+
+    async def start_browser(self):
+        """启动浏览器（异步）"""
+        self.controller = get_playwright_async()
+        try:
+            if self.controller.isClose or not self.controller.page:
+                await self.controller.start_browser(headless=True)
+            self.page = self.controller.page
+        except Exception as e:
+            print(f"启动异步浏览器失败: {e}")
+            self.controller = None
+            self.page = None
+            raise e
+
+    async def close(self):
+        """关闭浏览器（异步）"""
+        # 不关闭全局实例，让它复用
+        pass
+
+    async def get_mp_info(self, url: str) -> Dict[str, Any]:
+        """获取公众号信息（异步版本）
+
+        Args:
+            url: 微信文章链接
+
+        Returns:
+            公众号信息字典
+        """
+        info = {
+            "mp_name": "",
+            "mp_cover": "",
+            "mp_intro": "",
+            "biz": "",
+            "mp_id": "",
+            "article_url": url,
+            "article_id": "",
+            "title": "",
+            "author": "",
+            "publish_time": ""
+        }
+
+        try:
+            # 启动/获取浏览器
+            if not self.page:
+                await self.start_browser()
+
+            if not self.page:
+                return {"error": "浏览器启动失败", **info}
+
+            print(f"正在打开文章: {url}")
+            await self.controller.open_url(url)
+
+            # 等待页面加载
+            await asyncio.sleep(2)
+
+            # 检查是否需要验证
+            body = await self.page.locator("body").text_content()
+            if "当前环境异常" in body or "验证" in body:
+                info["error"] = "需要微信环境验证"
+                return info
+
+            # 获取公众号名称
+            mp_name = ""
+            try:
+                mp_name = await self.page.eval_on_selector('#js_wx_follow_nickname', 'el => el.textContent.trim()')
+            except:
+                pass
+
+            if not mp_name:
+                try:
+                    mp_name = await self.page.eval_on_selector('.profile_nickname', 'el => el.textContent.trim()')
+                except:
+                    pass
+
+            info["mp_name"] = mp_name
+
+            # 获取公众号头像
+            mp_cover = ""
+            try:
+                mp_cover = await self.page.eval_on_selector('#js_like_profile_bar .wx_follow_avatar img', 'el => el.src')
+            except:
+                try:
+                    mp_cover = await self.page.eval_on_selector('.profile_avatar img', 'el => el.src')
+                except:
+                    pass
+
+            info["mp_cover"] = mp_cover
+
+            # 获取 biz 参数
+            try:
+                biz = await self.page.evaluate('''() => window.biz || '' ''')
+                if not biz:
+                    content = await self.page.content()
+                    biz_match = re.search(r'window\.__biz=([^&"\']+)', content)
+                    if biz_match:
+                        biz = biz_match.group(1)
+
+                info["biz"] = biz
+
+                if biz:
+                    try:
+                        info["mp_id"] = "MP_WXS_" + base64.b64decode(biz).decode("utf-8")
+                    except:
+                        info["mp_id"] = "MP_WXS_" + biz
+            except Exception as e:
+                print(f"获取 biz 失败: {e}")
+
+            # 获取文章信息
+            try:
+                title = await self.page.eval_on_selector('meta[property="og:title"]', 'el => el.content')
+                if not title:
+                    title = await self.page.title()
+                info["title"] = title or ""
+
+                info["author"] = await self.page.eval_on_selector('meta[property="og:article:author"]', 'el => el.content') or ""
+
+                article_id_match = re.search(r'/s/([^/?]+)', url)
+                if article_id_match:
+                    info["article_id"] = article_id_match.group(1)
+
+            except Exception as e:
+                print(f"获取文章信息失败: {e}")
+
+        except Exception as e:
+            info["error"] = str(e)
+            print(f"获取公众号信息失败: {e}")
+
+        finally:
+            await self.close()
+
+        return info
+
+
+# 在新线程中运行同步的浏览器操作
+def _run_async_browser(url: str) -> Dict[str, Any]:
+    """在新线程中运行异步浏览器操作"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        fetcher = WeChatArticleFetcherAsync()
+        return loop.run_until_complete(fetcher.get_mp_info(url))
+    finally:
+        loop.close()
+
+
+def get_mp_info_by_article_async(url: str, cookies: str = "") -> Dict[str, Any]:
+    """通过文章链接获取公众号信息（异步版本，用于 FastAPI）
+
+    Args:
+        url: 微信文章链接
+        cookies: 可选的微信Cookie
+
+    Returns:
+        公众号信息字典
+    """
+    import concurrent.futures
+
+    # 在新线程中运行异步代码
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(_run_async_browser, url)
+        return future.result()
 
 
 def get_mp_info_by_article(url: str, cookies: str = "") -> Dict[str, Any]:

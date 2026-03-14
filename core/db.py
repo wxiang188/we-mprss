@@ -1,6 +1,6 @@
 """数据库模块"""
 import os
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, scoped_session
 from core.models import Base
 from core.config import cfg
@@ -38,6 +38,38 @@ class Database:
         # 创建所有表
         Base.metadata.create_all(cls._engine)
         print(f"数据库初始化完成: {db_path}")
+
+        # 执行数据库迁移（添加新列）
+        cls.migrate()
+
+    @classmethod
+    def migrate(cls):
+        """数据库迁移 - 添加新列"""
+        if cls._engine is None:
+            return
+
+        try:
+            with cls._engine.connect() as conn:
+                # 检查 articles 表是否需要添加新列
+                # 1. 检查 digest 列
+                result = conn.execute(text("PRAGMA table_info(articles)"))
+                columns = [row[1] for row in result]
+
+                if 'digest' not in columns:
+                    conn.execute(text("ALTER TABLE articles ADD COLUMN digest TEXT"))
+                    print("迁移: 添加 digest 列到 articles 表")
+
+                if 'content_html' not in columns:
+                    conn.execute(text("ALTER TABLE articles ADD COLUMN content_html TEXT"))
+                    print("迁移: 添加 content_html 列到 articles 表")
+
+                if 'is_export' not in columns:
+                    conn.execute(text("ALTER TABLE articles ADD COLUMN is_export INTEGER DEFAULT 0"))
+                    print("迁移: 添加 is_export 列到 articles 表")
+
+                conn.commit()
+        except Exception as e:
+            print(f"数据库迁移警告: {e}")
 
     @classmethod
     def get_session(cls):

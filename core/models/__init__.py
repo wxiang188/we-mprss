@@ -43,7 +43,8 @@ class Article(Base):
     title = Column(String(1000), nullable=False)  # 标题
     url = Column(String(500))  # 原文链接
     pic_url = Column(String(500))  # 封面图
-    description = Column(Text)  # 描述
+    description = Column(Text)  # 描述/摘要
+    digest = Column(Text)  # 摘要（与 description 相同）
     content = Column(Text)  # 文章内容
     content_html = Column(Text)  # HTML 内容
     author = Column(String(255))  # 作者
@@ -68,11 +69,14 @@ class Article(Base):
             'url': self.url,
             'pic_url': self.pic_url,
             'description': self.description,
+            'digest': self.digest,
             'content': self.content,
+            'content_html': self.content_html,
             'author': self.author,
             'publish_time': self.publish_time,
             'status': self.status,
             'is_read': self.is_read,
+            'is_export': self.is_export,
             'ai_category': self.ai_category,
             'ai_summary': self.ai_summary,
             'ai_tags': self.ai_tags,

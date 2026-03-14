@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from core.db import DB
 from core.models import Feed
 from core.wx.auth import generate_qr_code, check_login_status, get_wechat_auth
-from core.wx.article import parse_wechat_article, get_mp_info_by_article
+from core.wx.article import parse_wechat_article, get_mp_info_by_article_async
 from core.wx.mp import get_mp_list, get_mp_articles, search_biz
 from core.config import cfg
 from apis.base import success_response, error_response
@@ -267,8 +267,8 @@ async def get_mp_by_article(url: str = Query(..., min_length=1)):
         session_info = auth.get_session_info()
         active_cookies = session_info.get('cookies_str', '') or cfg.get("wechat.cookies", "")
 
-        # 使用新增强的 get_mp_info_by_article 函数
-        mp_info = get_mp_info_by_article(url, active_cookies)
+        # 使用新增强的 get_mp_info_by_article_async 函数（异步版本）
+        mp_info = get_mp_info_by_article_async(url, active_cookies)
 
         if not mp_info or not mp_info.get("mp_name"):
             # 如果失败，尝试使用旧的解析器
