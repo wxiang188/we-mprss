@@ -238,7 +238,9 @@ class WeChatArticleFetcher:
 
 
 class WeChatArticleFetcherAsync:
-    """微信公众号文章获取器 - 使用 Playwright 浏览器（异步版本，用于 FastAPI）"""
+    """微信公众号文章获取器 - 使用 Playwright 浏览器（异步版本，用于 FastAPI）
+    复刻原项目 driver/wxarticle.py 的 WXArticleFetcher 类
+    """
 
     def __init__(self):
         self.controller = None
@@ -262,8 +264,38 @@ class WeChatArticleFetcherAsync:
         # 不关闭全局实例，让它复用
         pass
 
+    async def safe_get_meta(self, page, prop: str) -> str:
+        """安全获取 meta 标签内容"""
+        try:
+            content = await page.eval_on_selector(f'meta[property="{prop}"]', 'el => el.content')
+            if content:
+                return content
+        except:
+            pass
+
+        # 备选：正则提取
+        try:
+            html = await page.content()
+            match = re.search(f'property="{prop}" content="([^"]+)"', html)
+            if match:
+                return match.group(1)
+        except:
+            pass
+
+        return ""
+
+    async def extract_biz_from_url(self, url: str) -> str:
+        """从URL中提取biz参数"""
+        match = re.search(r'[?&]__biz=([^&]+)', url)
+        if match:
+            return match.group(1)
+        match = re.search(r'[?&]biz=([^&]+)', url)
+        if match:
+            return match.group(1)
+        return ""
+
     async def get_mp_info(self, url: str) -> Dict[str, Any]:
-        """获取公众号信息（异步版本）
+        """获取公众号信息（异步版本）- 复刻原项目逻辑
 
         Args:
             url: 微信文章链接
@@ -281,9 +313,12 @@ class WeChatArticleFetcherAsync:
             "article_id": "",
             "title": "",
             "author": "",
-            "publish_time": ""
+            "publish_time": "",
+            "content": "",
+            "error": ""
         }
 
+        body = ""
         try:
             # 启动/获取浏览器
             if not self.page:
@@ -298,73 +333,180 @@ class WeChatArticleFetcherAsync:
             # 等待页面加载
             await asyncio.sleep(2)
 
-            # 检查是否需要验证
-            body = await self.page.locator("body").text_content()
-            if "当前环境异常" in body or "验证" in body:
+            page = self.page
+
+            # 获取页面内容用于检查
+            try:
+                body = await page.locator("body").text_content()
+                body = body.strip() if body else ""
+            except:
+                body = ""
+
+            # 检查各种异常情况
+            if "当前环境异常" in body or "完成验证后即可继续访问" in body:
                 info["error"] = "需要微信环境验证"
                 return info
 
-            # 获取公众号名称
-            mp_name = ""
+            if "该内容已被发布者删除" in body or "The content has been deleted by the author." in body:
+                info["error"] = "内容已被发布者删除"
+                return info
+
+            if "内容审核中" in body:
+                info["error"] = "内容审核中"
+                return info
+
+            if "该内容暂时无法查看" in body:
+                info["error"] = "内容暂时无法查看"
+                return info
+
+            if "违规无法查看" in body or "Unable to view this content because it violates regulation" in body:
+                info["error"] = "内容违规无法查看"
+                return info
+
+            if "发送失败无法查看" in body:
+                info["error"] = "发送失败无法查看"
+                return info
+
+            # 获取文章标题
+            title = await self.safe_get_meta(page, "og:title")
+            if not title:
+                try:
+                    title = await page.title()
+                except:
+                    title = ""
+            info["title"] = title
+
+            # 获取作者
+            info["author"] = await self.safe_get_meta(page, "og:article:author") or ""
+
+            # 获取描述
+            info["description"] = await self.safe_get_meta(page, "og:description") or ""
+
+            # 获取封面图
+            info["pic_url"] = await self.safe_get_meta(page, "twitter:image") or ""
+
+            # 获取发布时间
             try:
-                mp_name = await self.page.eval_on_selector('#js_wx_follow_nickname', 'el => el.textContent.trim()')
+                publish_time_str = await page.eval_on_selector('#publish_time', 'el => el.textContent.trim()')
+                info["publish_time"] = publish_time_str
             except:
                 pass
 
-            if not mp_name:
-                try:
-                    mp_name = await self.page.eval_on_selector('.profile_nickname', 'el => el.textContent.trim()')
-                except:
-                    pass
-
-            info["mp_name"] = mp_name
-
-            # 获取公众号头像
-            mp_cover = ""
+            # 获取文章正文内容
             try:
-                mp_cover = await self.page.eval_on_selector('#js_like_profile_bar .wx_follow_avatar img', 'el => el.src')
+                content_element = page.locator("#js_content")
+                await content_element.wait_for(state="attached", timeout=5000)
+                content = await content_element.inner_html()
+                info["content"] = content
             except:
+                # 尝试备选
                 try:
-                    mp_cover = await self.page.eval_on_selector('.profile_avatar img', 'el => el.src')
+                    content_element = page.locator("#js_article")
+                    content = await content_element.inner_html()
+                    info["content"] = content
                 except:
-                    pass
+                    info["content"] = ""
 
-            info["mp_cover"] = mp_cover
-
-            # 获取 biz 参数
-            try:
-                biz = await self.page.evaluate('''() => window.biz || '' ''')
-                if not biz:
-                    content = await self.page.content()
-                    biz_match = re.search(r'window\.__biz=([^&"\']+)', content)
-                    if biz_match:
-                        biz = biz_match.group(1)
-
-                info["biz"] = biz
-
-                if biz:
-                    try:
-                        info["mp_id"] = "MP_WXS_" + base64.b64decode(biz).decode("utf-8")
-                    except:
-                        info["mp_id"] = "MP_WXS_" + biz
-            except Exception as e:
-                print(f"获取 biz 失败: {e}")
-
-            # 获取文章信息
-            try:
-                title = await self.page.eval_on_selector('meta[property="og:title"]', 'el => el.content')
-                if not title:
-                    title = await self.page.title()
-                info["title"] = title or ""
-
-                info["author"] = await self.page.eval_on_selector('meta[property="og:article:author"]', 'el => el.content') or ""
-
-                article_id_match = re.search(r'/s/([^/?]+)', url)
-                if article_id_match:
+            # 获取文章ID
+            article_id_match = re.search(r'/s/([^/?]+)', url)
+            if article_id_match:
+                article_id = article_id_match.group(1)
+                # Base64 解码
+                try:
+                    padding = 4 - len(article_id) % 4
+                    if padding != 4:
+                        article_id += '=' * padding
+                    info["article_id"] = base64.b64decode(article_id).decode("utf-8")
+                except:
                     info["article_id"] = article_id_match.group(1)
 
-            except Exception as e:
-                print(f"获取文章信息失败: {e}")
+            # ===== 获取公众号信息 =====
+            # 获取公众号头像 - 多种选择器
+            logo_selectors = [
+                '#js_like_profile_bar .wx_follow_avatar img',
+                '.profile_avatar img',
+                '#js_profile_qrcode img',
+                'img.avatar'
+            ]
+            mp_cover = ""
+            for sel in logo_selectors:
+                try:
+                    ele = page.locator(sel)
+                    if await ele.count() > 0:
+                        mp_cover = await ele.first.get_attribute('src')
+                        if mp_cover:
+                            break
+                except:
+                    continue
+            info["mp_cover"] = mp_cover
+
+            # 获取公众号名称 - 多种选择器
+            name_selectors = [
+                '#js_wx_follow_nickname',
+                '.profile_nickname',
+                '.account_nickname'
+            ]
+            mp_name = ""
+            for sel in name_selectors:
+                try:
+                    ele = page.locator(sel)
+                    if await ele.count() > 0:
+                        mp_name = await ele.first.text_content()
+                        if mp_name:
+                            mp_name = mp_name.strip()
+                            if mp_name:
+                                break
+                except:
+                    continue
+
+            # 如果选择器失败，尝试 jQuery 方式
+            if not mp_name:
+                try:
+                    mp_name = await page.evaluate('() => $("#js_wx_follow_nickname").text()')
+                except:
+                    pass
+
+            info["mp_name"] = mp_name.strip() if mp_name else ""
+
+            # 获取 biz 参数
+            biz = ""
+            try:
+                # 优先从 JavaScript 变量获取
+                biz = await page.evaluate('() => window.biz')
+            except:
+                pass
+
+            # 备选：从 URL 或页面源码获取
+            if not biz:
+                biz = await self.extract_biz_from_url(url)
+
+            if not biz:
+                try:
+                    html = await page.content()
+                    # 尝试多种模式
+                    patterns = [
+                        r'var biz = "([^"]+)"',
+                        r'window\.__biz=([^&]+)',
+                        r'biz="([^"]+)"'
+                    ]
+                    for pattern in patterns:
+                        match = re.search(pattern, html)
+                        if match:
+                            biz = match.group(1)
+                            break
+                except:
+                    pass
+
+            info["biz"] = biz
+
+            # 生成 mp_id
+            if biz:
+                try:
+                    # 先尝试 Base64 解码
+                    info["mp_id"] = "MP_WXS_" + base64.b64decode(biz).decode("utf-8")
+                except:
+                    # 如果失败，直接使用 biz
+                    info["mp_id"] = "MP_WXS_" + biz
 
         except Exception as e:
             info["error"] = str(e)
@@ -384,6 +526,23 @@ def _run_async_browser(url: str) -> Dict[str, Any]:
     try:
         fetcher = WeChatArticleFetcherAsync()
         return loop.run_until_complete(fetcher.get_mp_info(url))
+    except Exception as e:
+        print(f"异步获取公众号信息失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "mp_name": "",
+            "mp_cover": "",
+            "mp_intro": "",
+            "biz": "",
+            "mp_id": "",
+            "article_url": url,
+            "article_id": "",
+            "title": "",
+            "author": "",
+            "publish_time": "",
+            "error": str(e)
+        }
     finally:
         loop.close()
 
@@ -433,26 +592,42 @@ def get_mp_info_by_article(url: str, cookies: str = "") -> Dict[str, Any]:
 
 # 保留原有的解析器作为备用
 def parse_wechat_article(url: str, cookies: str = "") -> Optional[Dict[str, Any]]:
-    """解析微信文章链接，获取公众号信息（备用方案）"""
+    """解析微信文章链接，获取公众号信息（备用方案 - HTTP请求）
+
+    复刻原项目的 driver/wxarticle.py 中的备用解析逻辑
+    """
     import requests
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Referer": "https://mp.weixin.qq.com/",
     }
     if cookies:
         headers["Cookie"] = cookies
 
     try:
-        response = requests.get(url, headers=headers, timeout=15)
+        response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
         response.encoding = 'utf-8'
         html = response.text
 
-        # 提取公众号名称 - 避免匹配到 jsdecode 等
+        # 检查是否需要验证
+        if "当前环境异常" in html or "完成验证后即可继续访问" in html:
+            print("HTTP解析: 需要微信环境验证")
+            return None
+
+        if "该内容已被发布者删除" in html or "该内容暂时无法查看" in html:
+            print("HTTP解析: 内容已被删除或无法查看")
+            return None
+
+        # 提取公众号名称 - 多种选择器
         mp_name = ""
         name_patterns = [
             r'id="js_wx_follow_nickname"[^>]*>([^<]+)<',
             r'class="profile_nickname"[^>]*>([^<]+)<',
+            r'class="account_nickname"[^>]*>([^<]+)<',
+            r'nickname["\']?\s*:\s*["\']([^"\']+)["\']',
         ]
         for pattern in name_patterns:
             match = re.search(pattern, html)
@@ -461,18 +636,13 @@ def parse_wechat_article(url: str, cookies: str = "") -> Optional[Dict[str, Any]
                 if mp_name and not mp_name.startswith('js'):  # 过滤掉 js 开头的错误匹配
                     break
 
-        # 如果还是匹配到 jsdecode，尝试从 JavaScript 变量获取
-        if not mp_name or mp_name.startswith('js'):
-            js_pattern = r'nickname["\']?\s*:\s*["\']([^"\']+)["\']'
-            match = re.search(js_pattern, html)
-            if match:
-                mp_name = match.group(1).strip()
-
-        # 提取公众号头像
+        # 提取公众号头像 - 多种选择器
         mp_cover = ""
         cover_patterns = [
             r'class="wx_follow_avatar"[^>]*src="([^"]+)"',
             r'class="profile_avatar"[^>]*src="([^"]+)"',
+            r'id="js_like_profile_bar"[^>]*?class="wx_follow_avatar[^>]*src="([^"]+)"',
+            r'img[^>]*class="avatar"[^>]*src="([^"]+)"',
         ]
         for pattern in cover_patterns:
             match = re.search(pattern, html)
@@ -482,15 +652,27 @@ def parse_wechat_article(url: str, cookies: str = "") -> Optional[Dict[str, Any]
                     mp_cover = 'https:' + mp_cover
                 break
 
-        # 提取 biz
+        # 如果封面还是空的，尝试从 meta og:image 获取
+        if not mp_cover:
+            og_image_match = re.search(r'property="og:image"[^>]*content="([^"]+)"', html)
+            if not og_image_match:
+                og_image_match = re.search(r'content="og:image"[^>]*content="([^"]+)"', html)
+            if og_image_match:
+                mp_cover = og_image_match.group(1)
+
+        # 提取 biz - 多种方式
         biz = ""
-        biz_match = re.search(r'window\.__biz=([^&]+)', html)
-        if biz_match:
-            biz = biz_match.group(1)
-        else:
-            biz_match = re.search(r'var\s+biz\s*=\s*"([^"]+)"', html)
+        biz_patterns = [
+            r'window\.__biz=([^&]+)',
+            r'var\s+biz\s*=\s*"([^"]+)"',
+            r'biz=([^&"]+)',
+            r'__biz=([^&"]+)',
+        ]
+        for pattern in biz_patterns:
+            biz_match = re.search(pattern, html)
             if biz_match:
-                biz = biz_match.group(1)
+                biz = biz_match.group(1).strip()
+                break
 
         # 生成 mp_id
         mp_id = ""
@@ -500,6 +682,24 @@ def parse_wechat_article(url: str, cookies: str = "") -> Optional[Dict[str, Any]
             except:
                 mp_id = "MP_WXS_" + biz
 
+        # 提取文章标题
+        title = ""
+        title_patterns = [
+            r'property="og:title"[^>]*content="([^"]+)"',
+            r'<title>([^<]+)</title>',
+        ]
+        for pattern in title_patterns:
+            title_match = re.search(pattern, html)
+            if title_match:
+                title = title_match.group(1).strip()
+                break
+
+        # 提取文章ID
+        article_id = ""
+        article_id_match = re.search(r'/s/([^/?]+)', url)
+        if article_id_match:
+            article_id = article_id_match.group(1)
+
         return {
             "mp_name": mp_name,
             "mp_cover": mp_cover,
@@ -507,6 +707,8 @@ def parse_wechat_article(url: str, cookies: str = "") -> Optional[Dict[str, Any]
             "biz": biz,
             "mp_id": mp_id,
             "article_url": url,
+            "article_id": article_id,
+            "title": title,
         }
 
     except Exception as e:
